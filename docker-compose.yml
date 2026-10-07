@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: gaming-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gaming_user
+      POSTGRES_PASSWORD: gaming_password
+      POSTGRES_DB: gaming_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
