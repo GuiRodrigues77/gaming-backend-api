@@ -4,6 +4,7 @@
   import { Game } from './entities/game.entity';
   import { CreateGameDto } from './dto/create-game.dto';
   import { UpdateGameDto } from './dto/update-game.dto';
+  import { QueryGamesDto } from './dto/query-games.dto';
   
   @Injectable()
   export class GamesService {
@@ -12,9 +13,39 @@
       private readonly gameRepository: EntityRepository<Game>,
     ) {}
 
-    async findAll() {
-      return this.gameRepository.findAll();
-    }
+    async findAll(query: QueryGamesDto) {
+  const { page = 1, limit = 10, name, genre, platform } = query;
+
+  const where: Record<string, any> = {};
+
+  if (name) {
+    where.name = { $ilike: `%${name}%` };
+  }
+
+  if (genre) {
+    where.genre = { $ilike: `%${genre}%` };
+  }
+
+  if (platform) {
+    where.platform = { $ilike: `%${platform}%` };
+  }
+
+  const [games, total] = await this.gameRepository.findAndCount(where, {
+    limit,
+    offset: (page - 1) * limit,
+    orderBy: { id: 'ASC' },
+  });
+
+  return {
+    data: games,
+    meta: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
 
     async create(createGameDto: CreateGameDto) {
       const game = this.gameRepository.create(createGameDto);
