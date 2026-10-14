@@ -1,24 +1,55 @@
 # 🎮 Gaming Backend API
 
-Backend REST desenvolvido com **NestJS e TypeScript** para uma plataforma de jogos.
+REST API desenvolvida com **NestJS e TypeScript** para gerenciamento de usuários, jogos e sessões de jogo.
 
-O projeto foi desenvolvido como projeto de portfólio com foco em **desenvolvimento backend**, explorando arquitetura modular, APIs REST, persistência de dados, relacionamentos entre entidades, validação e documentação de APIs.
+Este projeto de portfólio tem como objetivo explorar conceitos de desenvolvimento backend, arquitetura modular, persistência de dados, relacionamentos entre entidades, validação de dados, testes automatizados e documentação de APIs.
 
 ## 🚀 Tecnologias
 
-* **Node.js**
-* **TypeScript**
-* **NestJS**
-* **PostgreSQL**
-* **MikroORM**
-* **Docker**
-* **Swagger / OpenAPI**
-* **class-validator**
-* **Git**
+- **Node.js**
+- **TypeScript**
+- **NestJS**
+- **PostgreSQL**
+- **MikroORM**
+- **Docker**
+- **Swagger / OpenAPI**
+- **class-validator**
+- **Jest**
+- **Git e GitHub**
+
+## ✨ Funcionalidades
+
+### 👤 Users
+
+- Criar usuários
+- Listar usuários
+- Buscar usuário por ID
+- Atualizar usuários
+- Remover usuários
+- Validar dados de entrada
+
+### 🎮 Games
+
+- Criar jogos
+- Listar jogos
+- Buscar jogo por ID
+- Atualizar jogos
+- Remover jogos
+- Filtrar jogos por nome, gênero e plataforma
+- Paginar resultados com parâmetros de página e limite
+- Validar dados de entrada
+
+### 🕹️ Game Sessions
+
+- Criar sessões de jogo
+- Listar sessões de jogo
+- Buscar sessão por ID
+- Relacionar sessões com usuários
+- Relacionar sessões com jogos
 
 ## 🏗️ Arquitetura
 
-O projeto utiliza a arquitetura modular do NestJS, separando responsabilidades por domínio.
+O projeto utiliza a arquitetura modular do NestJS, organizando responsabilidades em módulos, controllers, services, DTOs e entidades.
 
 ```text
 src/
@@ -47,51 +78,22 @@ src/
 └── main.ts
 ```
 
-## 📌 Funcionalidades
-
-### Users
-
-* Criar usuário
-* Listar usuários
-* Buscar usuário por ID
-* Atualizar usuário
-* Remover usuário
-* Validação de dados
-
-### Games
-
-* Criar jogo
-* Listar jogos
-* Buscar jogo por ID
-* Atualizar jogo
-* Remover jogo
-* Validação de dados
-
-### Game Sessions
-
-* Criar sessão de jogo
-* Listar sessões
-* Buscar sessão por ID
-* Relacionar sessão com usuário
-* Relacionar sessão com jogo
-
 ## 🔗 Relacionamentos
 
-As sessões de jogo possuem relacionamentos com usuários e jogos utilizando o MikroORM:
+As sessões de jogo utilizam o MikroORM para relacionar usuários e jogos.
 
 ```text
-User 1 ───────── N GameSession N ───────── 1 Game
+User 1 ─────── N GameSession N ─────── 1 Game
 ```
 
-Uma sessão pertence a um usuário e a um jogo.
+Cada sessão está associada a um usuário e a um jogo.
 
-## 🐳 Executando o projeto
+## 🐳 Como executar o projeto
 
 ### Pré-requisitos
 
-* Node.js
-* npm
-* Docker Desktop
+- Node.js e npm
+- Docker Desktop
 
 ### 1. Clone o repositório
 
@@ -106,7 +108,9 @@ cd gaming-backend-api
 npm install
 ```
 
-### 3. Inicie o PostgreSQL com Docker
+### 3. Inicie o banco de dados
+
+Com o Docker Desktop em execução, utilize:
 
 ```bash
 docker compose up -d
@@ -124,59 +128,82 @@ npx mikro-orm migration:up
 npm run start:dev
 ```
 
-A API estará disponível em:
+Por padrão, a API estará disponível em:
 
-```text
-http://localhost:3000
-```
+`http://localhost:3000`
+
+> Verifique a configuração local do banco de dados antes de iniciar a aplicação.
 
 ## 📚 Documentação da API
 
-A documentação interativa foi criada utilizando Swagger.
+A API possui documentação interativa com Swagger / OpenAPI.
 
-Após iniciar a aplicação, acesse:
+Com a aplicação em execução, acesse:
 
-```text
-http://localhost:3000/api
-```
+`http://localhost:3000/api`
 
-Por meio do Swagger é possível visualizar e testar os endpoints da API.
+A documentação permite visualizar os endpoints disponíveis e testar requisições diretamente pelo navegador.
 
-## 🔌 Principais endpoints
+## 🔌 Endpoints
 
 ### Users
 
-```text
-GET    /users
-GET    /users/:id
-POST   /users
-PATCH  /users/:id
-DELETE /users/:id
-```
+| Método | Endpoint | Descrição |
+|---|---|---|
+| GET | `/users` | Lista usuários |
+| GET | `/users/:id` | Busca usuário por ID |
+| POST | `/users` | Cria usuário |
+| PATCH | `/users/:id` | Atualiza usuário |
+| DELETE | `/users/:id` | Remove usuário |
 
 ### Games
 
-```text
-GET    /games
-GET    /games/:id
-POST   /games
-PATCH  /games/:id
-DELETE /games/:id
-```
+| Método | Endpoint | Descrição |
+|---|---|---|
+| GET | `/games` | Lista jogos |
+| GET | `/games/:id` | Busca jogo por ID |
+| POST | `/games` | Cria jogo |
+| PATCH | `/games/:id` | Atualiza jogo |
+| DELETE | `/games/:id` | Remove jogo |
 
 ### Game Sessions
 
-```text
-GET  /game-sessions
-GET  /game-sessions/:id
-POST /game-sessions
+| Método | Endpoint | Descrição |
+|---|---|---|
+| GET | `/game-sessions` | Lista sessões |
+| GET | `/game-sessions/:id` | Busca sessão por ID |
+| POST | `/game-sessions` | Cria sessão |
+
+## 🔎 Paginação e filtros de jogos
+
+O endpoint `GET /games` permite consultar jogos com paginação e filtros.
+
+Exemplos de requisições:
+
+```http
+GET /games?page=1&limit=5
+GET /games?name=Cyber
+GET /games?genre=Action&platform=PC
+GET /games?page=1&limit=10&name=Cyber&genre=Action&platform=PC
 ```
 
-## 🧪 Validação
+Parâmetros disponíveis:
 
-A API utiliza `class-validator` e `ValidationPipe` para validar os dados recebidos nas requisições.
+| Parâmetro | Descrição |
+|---|---|
+| `page` | Número da página |
+| `limit` | Quantidade de resultados por página |
+| `name` | Filtra pelo nome do jogo |
+| `genre` | Filtra pelo gênero |
+| `platform` | Filtra pela plataforma |
 
-Exemplo de criação de uma sessão:
+A resposta da listagem paginada inclui metadados como total de registros, página atual, limite e total de páginas.
+
+## ✅ Validação de dados
+
+A API utiliza `class-validator` e `ValidationPipe` para validar dados recebidos nas requisições.
+
+Exemplo de payload para criação de uma sessão de jogo:
 
 ```json
 {
@@ -187,11 +214,13 @@ Exemplo de criação de uma sessão:
 }
 ```
 
+O payload deve respeitar os campos e os tipos definidos no DTO da sessão.
+
 ## 🗄️ Banco de dados
 
-O PostgreSQL é executado utilizando Docker.
+O projeto utiliza PostgreSQL para persistência de dados e Docker para execução do banco no ambiente local.
 
-Configuração utilizada no ambiente local:
+Configuração local documentada:
 
 ```text
 Database: gaming_db
@@ -199,27 +228,46 @@ User: gaming_user
 Port: 5432
 ```
 
-As alterações no modelo de dados são controladas utilizando **MikroORM Migrations**.
+As alterações no modelo de dados são gerenciadas por meio de migrations do MikroORM.
 
-## 🎯 Objetivo do projeto
+## 🧪 Testes e build
 
-O projeto foi criado para praticar e demonstrar conhecimentos em desenvolvimento backend, incluindo:
+Execute os testes automatizados:
 
-* Desenvolvimento de APIs REST
-* Arquitetura modular
-* TypeScript
-* NestJS
-* PostgreSQL
-* ORM e relacionamentos
-* Docker
-* Validação de dados
-* Migrations
-* Documentação de APIs
+```bash
+npm test -- --runInBand
+```
+
+Compile o projeto:
+
+```bash
+npm run build
+```
+
+No estado atual do projeto, os testes executados passaram: **7 suítes e 9 testes aprovados**. A compilação também foi concluída sem erros.
+
+## 🎯 Objetivos de aprendizado
+
+Este projeto explora conceitos e práticas de desenvolvimento backend, incluindo:
+
+- Construção de APIs REST
+- Arquitetura modular com NestJS
+- Desenvolvimento com TypeScript
+- Persistência de dados com PostgreSQL e MikroORM
+- Relacionamentos entre entidades
+- Paginação e filtros
+- Validação de dados
+- Migrations
+- Docker
+- Documentação com Swagger
+- Testes automatizados com Jest
+- Versionamento com Git
 
 ## 👨‍💻 Autor
 
 **Guilherme Rodrigues Gabriel**
 
-Computer Engineering student | Backend Developer
+Computer Engineering Student | Backend Development
 
-GitHub: https://github.com/GuiRodrigues77
+- GitHub: [GuiRodrigues77](https://github.com/GuiRodrigues77)
+- Projeto: [gaming-backend-api](https://github.com/GuiRodrigues77/gaming-backend-api)
