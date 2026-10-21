@@ -1,0 +1,241 @@
+import { MikroORM } from '@mikro-orm/postgresql';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import config from '../../../mikro-orm.config';
+import { Money } from '../domain/money/money';
+import { FailureCode } from '../domain/transaction/failure-code';
+import { WagerTransactionStatus as Status } from '../domain/transaction/wager-transaction-status';
+import { MikroOrmWageringUnitOfWork } from '../infrastructure/persistence/mikro-orm-wagering-unit-of-work';
+import { WAGERING_SCHEMAS } from '../infrastructure/persistence/wagering-schemas';
+import { openWalletInDb } from '../testing/wallet-fixture';
+import { IdempotencyConflictError } from './errors';
+import {
+  SubmitWagerTransaction,
+  type SubmitWagerTransactionCommand,
+} from './submit-wager-transaction';
+
+const RUN = process.env.DATABASE_INTEGRATION?.trim() === '1';
+const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
+
+describe.skipIf(!RUN)('SubmitWagerTransaction (PostgreSQL real)', () => {
+  let orm: MikroORM;
+  let submit: SubmitWagerTransaction;
+
+  beforeAll(async () => {
+    orm = await MikroORM.init({ ...config, entities: WAGERING_SCHEMAS, entitiesTs: WAGERING_SCHEMAS });
+    submit = new SubmitWagerTransaction(new MikroOrmWageringUnitOfWork(orm.em));
+  });
+
+  afterAll(async () => {
+    await orm.close();
+  });
+
+  beforeEach(async () => {
+    await orm.em
+      .getConnection()
+      .execute('TRUNCATE wallet_ledger_entries, wager_transactions, wallets');
+  });
+
+  const command = (
+    walletId: string,
+    playerId: string,
+    overrides: Partial<SubmitWagerTransactionCommand> = {},
+  ): SubmitWagerTransactionCommand => {
+    const externalTransactionId = overrides.externalTransactionId ?? `ext-${randomUUID()}`;
+    return {
+      idempotencyKey: `provider-a:${externalTransactionId}`,
+      providerId: 'provider-a',
+      externalTransactionId,
+      playerId,
+      walletId,
+      roundId: 'round-1',
+      gameId: 'game-1',
+      kind: 'BET',
+      money: { amount: '25.00', currency: 'BRL' },
+      ...overrides,
+    };
+  };
+
+  /** Invariante final de todos os testes: wallet.balance == saldo reconstruído pelo ledger. */
+  async function ledgerOf(walletId: string) {
+    const rows = (await orm.em.getConnection().execute(
+      `select w.balance::text as balance,
+              coalesce(sum(case l.direction when 'CREDIT' then l.amount else -l.amount end), 0)::text as ledger,
+              count(l.id)::text as entries,
+              (count(l.id) filter (where l.direction = 'DEBIT'))::text as debits
+         from wallets w
+         left join wallet_ledger_entries l on l.wallet_id = w.id
+        where w.id = ?
+        group by w.balance`,
+      [walletId],
+    )) as unknown as Array<{ balance: string; ledger: string; entries: string; debits: string }>;
+    const row = rows[0]!;
+    const balance = Money.from({ amount: String(row.balance), currency: 'BRL' });
+    const rebuilt = Money.from({ amount: String(row.ledger), currency: 'BRL' });
+    expect(balance.equals(rebuilt)).toBe(true);
+    return { balance, entries: Number(row.entries), debits: Number(row.debits) };
+  }
+
+  test('a mesma aposta enviada 50 vezes em paralelo gera um único débito', async () => {
+    const { walletId, playerId } = await openWalletInDb(orm, '1000.00');
+    const cmd = command(walletId, playerId);
+
+    const results = await Promise.all(Array.from({ length: 50 }, () => submit.execute(cmd)));
+
+    expect(results.filter((r) => !r.idempotentReplay)).toHaveLength(1);
+    expect(new Set(results.map((r) => r.transactionId)).size).toBe(1);
+    expect(results.every((r) => r.status === Status.Processed)).toBe(true);
+    expect(results.every((r) => r.balance?.amount === '975.00')).toBe(true);
+
+    const ledger = await ledgerOf(walletId);
+    expect(ledger.balance.amount).toBe('975.00');
+    expect(ledger.debits).toBe(1);
+    expect(ledger.entries).toBe(2); // abertura + 1 débito
+  });
+
+  test('cenário obrigatório: saldo 100, duas apostas de 80 simultâneas', async () => {
+    const { walletId, playerId } = await openWalletInDb(orm, '100.00');
+    const a = command(walletId, playerId, { money: { amount: '80.00', currency: 'BRL' } });
+    const b = command(walletId, playerId, { money: { amount: '80.00', currency: 'BRL' } });
+
+    const results = await Promise.all([submit.execute(a), submit.execute(b)]);
+
+    const processed = results.filter((r) => r.status === Status.Processed);
+    const rejected = results.filter((r) => r.status === Status.Rejected);
+    expect(processed).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.failureCode).toBe(FailureCode.InsufficientFunds);
+
+    let ledger = await ledgerOf(walletId);
+    expect(ledger.balance.amount).toBe('20.00');
+    expect(ledger.debits).toBe(1);
+
+    // retries não duplicam o débito e devolvem o resultado original
+    const retried = await Promise.all([submit.execute(a), submit.execute(b)]);
+    expect(retried.every((r) => r.idempotentReplay)).toBe(true);
+    expect(retried.map((r) => r.status).sort()).toEqual(results.map((r) => r.status).sort());
+    ledger = await ledgerOf(walletId);
+    expect(ledger.balance.amount).toBe('20.00');
+    expect(ledger.debits).toBe(1);
+  });
+
+  test('mesma chave com payload diferente é conflito, não replay', async () => {
+    const { walletId, playerId } = await openWalletInDb(orm);
+    const original = command(walletId, playerId);
+    await submit.execute(original);
+
+    await expect(
+      submit.execute({ ...original, money: { amount: '30.00', currency: 'BRL' } }),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
+    expect((await ledgerOf(walletId)).balance.amount).toBe('975.00');
+  });
+
+  test('wallets distintas são processadas em paralelo, sem interferência', async () => {
+    const wallets = await Promise.all(Array.from({ length: 10 }, () => openWalletInDb(orm, '1000.00')));
+    const results = await Promise.all(
+      wallets.map((w) => submit.execute(command(w.walletId, w.playerId))),
+    );
+    expect(results.every((r) => r.status === Status.Processed)).toBe(true);
+    for (const w of wallets) {
+      expect((await ledgerOf(w.walletId)).balance.amount).toBe('975.00');
+    }
+  });
+
+  test('REFUND reverte a aposta uma única vez; ROLLBACK da mesma aposta é recusado', async () => {
+    const { walletId, playerId } = await openWalletInDb(orm, '1000.00');
+    const bet = command(walletId, playerId, { externalTransactionId: 'bet-1' });
+    await submit.execute(bet);
+
+    const refund = command(walletId, playerId, {
+      externalTransactionId: 'refund-1',
+      kind: 'REFUND',
+      referenceExternalTransactionId: 'bet-1',
+    });
+    const refunded = await submit.execute(refund);
+    expect(refunded.status).toBe(Status.Processed);
+    expect(refunded.balance?.amount).toBe('1000.00');
+
+    const second = await submit.execute(
+      command(walletId, playerId, {
+        externalTransactionId: 'refund-2',
+        kind: 'REFUND',
+        referenceExternalTransactionId: 'bet-1',
+      }),
+    );
+    expect(second.failureCode).toBe(FailureCode.AlreadyReversed);
+
+    const rollback = await submit.execute(
+      command(walletId, playerId, {
+        externalTransactionId: 'rollback-1',
+        kind: 'ROLLBACK',
+        referenceExternalTransactionId: 'bet-1',
+      }),
+    );
+    expect(rollback.failureCode).toBe(FailureCode.AlreadyReversed);
+
+    const ledger = await ledgerOf(walletId);
+    expect(ledger.balance.amount).toBe('1000.00');
+    expect(ledger.entries).toBe(3); // abertura, débito da aposta, crédito do refund
+  });
+
+  test('REFUND antes da BET fica PENDING_REFERENCE e não mexe no saldo', async () => {
+    const { walletId, playerId } = await openWalletInDb(orm, '1000.00');
+    const refund = command(walletId, playerId, {
+      externalTransactionId: 'refund-1',
+      kind: 'REFUND',
+      referenceExternalTransactionId: 'bet-not-arrived',
+    });
+    const first = await submit.execute(refund);
+    expect(first.status).toBe(Status.PendingReference);
+    expect(first.balance?.amount).toBe('1000.00');
+
+    const again = await submit.execute(refund);
+    expect(again.idempotentReplay).toBe(true);
+    expect(again.status).toBe(Status.PendingReference);
+    expect((await ledgerOf(walletId)).entries).toBe(1);
+  });
+
+  test('ROLLBACK que deixaria saldo negativo é REVERSAL_WOULD_OVERDRAW', async () => {
+    const { walletId, playerId } = await openWalletInDb(orm, '100.00');
+    await submit.execute(
+      command(walletId, playerId, { externalTransactionId: 'win-1', kind: 'WIN', money: { amount: '100.00', currency: 'BRL' } }),
+    ); // saldo 200
+    await submit.execute(
+      command(walletId, playerId, { externalTransactionId: 'bet-1', money: { amount: '200.00', currency: 'BRL' } }),
+    ); // saldo 0
+
+    const rollback = await submit.execute(
+      command(walletId, playerId, {
+        externalTransactionId: 'rollback-1',
+        kind: 'ROLLBACK',
+        referenceExternalTransactionId: 'win-1',
+        money: { amount: '100.00', currency: 'BRL' },
+      }),
+    );
+    expect(rollback.status).toBe(Status.Rejected);
+    expect(rollback.failureCode).toBe(FailureCode.ReversalWouldOverdraw);
+    expect((await ledgerOf(walletId)).balance.amount).toBe('0.00');
+  });
+
+  test('jogador diferente do dono: rejeita e não vaza o saldo', async () => {
+    const { walletId } = await openWalletInDb(orm, '1000.00');
+    const result = await submit.execute(command(walletId, randomUUID()));
+    expect(result.failureCode).toBe(FailureCode.PlayerWalletMismatch);
+    expect(result.balance).toBeUndefined();
+    expect((await ledgerOf(walletId)).balance.amount).toBe('1000.00');
+  });
+
+  test('wallet inexistente: 20 requisições simultâneas gravam uma única rejeição auditável', async () => {
+    const cmd = command(randomUUID(), randomUUID());
+    const results = await Promise.all(Array.from({ length: 20 }, () => submit.execute(cmd)));
+
+    expect(results.every((r) => r.failureCode === FailureCode.WalletNotFound)).toBe(true);
+    expect(results.filter((r) => !r.idempotentReplay)).toHaveLength(1);
+    const rows = (await orm.em
+      .getConnection()
+      .execute(`select count(*)::int as n from wager_transactions where external_transaction_id = ?`, [
+        cmd.externalTransactionId,
+      ])) as unknown as Array<{ n: number }>;
+    expect(rows[0]!.n).toBe(1);
+  });
+});
