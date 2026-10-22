@@ -6,6 +6,7 @@ import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { GamesModule } from './games/games.module';
 import { GameSessionsModule } from './game-sessions/game-sessions.module';
 import config from '../mikro-orm.config';
+import { WageringModule } from './wagering/wagering.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import config from '../mikro-orm.config';
     UsersModule,
     GamesModule,
     GameSessionsModule,
+    WageringModule,
   ],
   controllers: [AppController],
   providers: [AppService],

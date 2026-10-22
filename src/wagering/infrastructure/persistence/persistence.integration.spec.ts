@@ -14,7 +14,7 @@ import { WagerTransactionRecord } from './wager-transaction.record';
 import { WalletLedgerEntryRecord } from './wallet-ledger-entry.record';
 import { WalletRecord } from './wallet.record';
 import { WAGERING_SCHEMAS } from './wagering-schemas';
-
+import { resetWageringTables } from '../../testing/reset-tables';
 const RUN = process.env.DATABASE_INTEGRATION?.trim() === '1';
 const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
 
@@ -34,9 +34,7 @@ describe.skipIf(!RUN)('persistência (PostgreSQL real)', () => {
   });
 
   beforeEach(async () => {
-    await orm.em
-      .getConnection()
-      .execute('TRUNCATE wallet_ledger_entries, wager_transactions, wallets');
+    await resetWageringTables(orm);
   });
 
   /** Abre uma wallet como o use case de criação fará: wallet + OPENING + ledger, na mesma transação. */

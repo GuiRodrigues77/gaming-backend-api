@@ -1,4 +1,5 @@
 import { Money, type MoneyProps } from '../domain/money/money';
+import { OutboxMessage } from '../domain/outbox/outbox-message';
 import type { FailureCode } from '../domain/transaction/failure-code';
 import { WagerTransaction } from '../domain/transaction/wager-transaction';
 import { InvalidWagerTransactionError } from '../domain/transaction/wager-transaction.errors';
@@ -12,6 +13,7 @@ import type {
   WageringUnitOfWork,
 } from './ports/wagering-unit-of-work.port';
 import { uuidv7 } from './uuid-v7';
+import { buildWagerEvents } from './wager-events';
 import { WagerTransactionProcessor } from './wager-transaction-processor';
 
 export interface SubmitWagerTransactionCommand {
@@ -25,6 +27,8 @@ export interface SubmitWagerTransactionCommand {
   kind: string;
   money: MoneyProps;
   referenceExternalTransactionId?: string | undefined;
+  /** Para rastrear a requisição nos eventos e logs. Se ausente, é gerado. */
+  correlationId?: string | undefined;
 }
 
 export interface SubmitWagerTransactionResult {
@@ -172,6 +176,18 @@ export class SubmitWagerTransaction {
     if (wallet !== undefined && result.ledgerEntry !== undefined) {
       scope.appendLedgerEntry(result.ledgerEntry, wallet.version);
     }
+
+    // 5) Outbox: os eventos entram na MESMA transação SQL (nada é publicado aqui).
+    const events = buildWagerEvents({
+      transaction: tx,
+      outcome: result.outcome,
+      wallet,
+      ledgerEntry: result.ledgerEntry,
+      correlationId: command.correlationId ?? this.newId(),
+      newId: this.newId,
+      now,
+    });
+    for (const event of events) scope.enqueueOutbox(OutboxMessage.enqueue(event));
 
     return {
       transactionId: tx.id,

@@ -18,3 +18,31 @@ export class UniqueViolationError extends Error {
     this.name = 'UniqueViolationError';
   }
 }
+
+export class WalletAlreadyExistsError extends Error {
+  constructor(
+    public readonly playerId: string,
+    public readonly currency: string,
+  ) {
+    super(`Wallet already exists for player ${playerId} in ${currency}`);
+    this.name = 'WalletAlreadyExistsError';
+  }
+}
+
+export class ResourceNotFoundError extends Error {
+  constructor(
+    public readonly resource: string,
+    public readonly id: string,
+  ) {
+    super(`${resource} ${id} not found`);
+    this.name = 'ResourceNotFoundError';
+  }
+}
+
+/** Parâmetro de consulta inválido (cursor, limit, id malformado). */
+export class InvalidQueryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidQueryError';
+  }
+}

@@ -5,7 +5,6 @@ import config from '../../../mikro-orm.config';
 import { Money } from '../domain/money/money';
 import { FailureCode } from '../domain/transaction/failure-code';
 import { WagerTransactionStatus as Status } from '../domain/transaction/wager-transaction-status';
-import { MikroOrmWageringUnitOfWork } from '../infrastructure/persistence/mikro-orm-wagering-unit-of-work';
 import { WAGERING_SCHEMAS } from '../infrastructure/persistence/wagering-schemas';
 import { openWalletInDb } from '../testing/wallet-fixture';
 import { IdempotencyConflictError } from './errors';
@@ -13,6 +12,9 @@ import {
   SubmitWagerTransaction,
   type SubmitWagerTransactionCommand,
 } from './submit-wager-transaction';
+import { resetWageringTables } from '../testing/reset-tables';
+import { MikroOrmWageringUnitOfWork } from '../infrastructure/persistence/mikro-orm-wagering-unit-of-work';
+
 
 const RUN = process.env.DATABASE_INTEGRATION?.trim() === '1';
 const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
@@ -31,9 +33,7 @@ describe.skipIf(!RUN)('SubmitWagerTransaction (PostgreSQL real)', () => {
   });
 
   beforeEach(async () => {
-    await orm.em
-      .getConnection()
-      .execute('TRUNCATE wallet_ledger_entries, wager_transactions, wallets');
+    await resetWageringTables(orm);
   });
 
   const command = (

@@ -1,5 +1,6 @@
 import type { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
 import type { Money } from '../../domain/money/money';
+import type { OutboxMessage } from '../../domain/outbox/outbox-message';
 import type { WagerTransaction } from '../../domain/transaction/wager-transaction';
 import type { Wallet } from '../../domain/wallet/wallet';
 
@@ -32,6 +33,8 @@ export interface WageringTransactionScope extends ReferenceLookup {
   /** Persiste e faz flush (a transação precisa existir antes do ledger, por causa da FK). */
   saveNewTransaction(tx: WagerTransaction, extras: NewTransactionExtras): Promise<void>;
   appendLedgerEntry(entry: WalletLedgerEntry, walletVersion: number): void;
+  /** Grava na mesma transação SQL do saldo/ledger (transactional outbox). */
+  enqueueOutbox(message: OutboxMessage): void;
 }
 
 export interface WageringUnitOfWork {

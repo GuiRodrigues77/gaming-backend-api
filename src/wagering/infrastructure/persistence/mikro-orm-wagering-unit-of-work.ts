@@ -20,6 +20,8 @@ import { WagerTransactionMapper } from './mappers/wager-transaction.mapper';
 import { WalletMapper } from './mappers/wallet.mapper';
 import { WagerTransactionRecord } from './wager-transaction.record';
 import { WalletRecord } from './wallet.record';
+import type { OutboxMessage } from '../../domain/outbox/outbox-message';
+import { OutboxMessageMapper } from './mappers/outbox-message.mapper.js';
 
 function isUniqueViolation(error: unknown): boolean {
   if (error instanceof UniqueConstraintViolationException) return true;
@@ -95,6 +97,10 @@ class MikroOrmWageringScope implements WageringTransactionScope {
           : Money.from({ amount: record.observedBalance, currency: record.currency }),
     };
   }
+    enqueueOutbox(message: OutboxMessage): void {
+    this.em.persist(OutboxMessageMapper.toRecord(message)); // flush junto com o commit
+  }
+
 }
 
 @Injectable()
