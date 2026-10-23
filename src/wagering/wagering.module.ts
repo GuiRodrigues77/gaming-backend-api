@@ -50,7 +50,7 @@ import {
 import { SqsWagerQueue } from './infrastructure/messaging/sqs-wager-queue';
 import { WagerConsumerWorkerService } from './infrastructure/workers/wager-consumer-worker.service';
 
-// Importações de Métricas (NOVO)
+// Importações de Métricas
 import {
   METRICS_RENDERER,
   WAGERING_METRICS,
@@ -62,13 +62,14 @@ import { MetricsController } from './interface/http/metrics.controller';
 const pendingReferencesLogger = new Logger('PendingReferences');
 const WAGER_CONSUMER_NAME = 'wager-consumer';
 const wagerConsumerLogger = new Logger('WagerConsumer');
+const wageringLogger = new Logger('Wagering'); // NOVO
 
 @Module({
   controllers: [
     WalletsController,
     WageringController,
     HealthController,
-    MetricsController, // NOVO
+    MetricsController,
   ],
   providers: [
     // portas -> adaptadores MikroORM
@@ -101,7 +102,7 @@ const wagerConsumerLogger = new Logger('WagerConsumer');
       inject: [SQS_CLIENT, SQS_CONFIG],
     },
 
-    // métricas (Prometheus) (NOVO)
+    // métricas (Prometheus)
     PrometheusWageringMetrics,
     { provide: WAGERING_METRICS, useExisting: PrometheusWageringMetrics },
     { provide: METRICS_RENDERER, useExisting: PrometheusWageringMetrics },
@@ -110,8 +111,12 @@ const wagerConsumerLogger = new Logger('WagerConsumer');
     {
       provide: SubmitWagerTransaction,
       useFactory: (uow: WageringUnitOfWork, metrics: WageringMetrics) =>
-        new SubmitWagerTransaction(uow, { metrics }),
-      inject: [WAGERING_UNIT_OF_WORK, WAGERING_METRICS], // ATUALIZADO
+        new SubmitWagerTransaction(uow, {
+          metrics,
+          onDecision: (decision) =>
+            wageringLogger.log({ event: 'transaction_decided', ...decision }),
+        }),
+      inject: [WAGERING_UNIT_OF_WORK, WAGERING_METRICS],
     },
     {
       provide: CreateWallet,
@@ -138,7 +143,7 @@ const wagerConsumerLogger = new Logger('WagerConsumer');
       provide: OutboxPublisher,
       useFactory: (store: OutboxStore, publisher: EventPublisher, metrics: WageringMetrics) =>
         new OutboxPublisher(store, publisher, { metrics }),
-      inject: [OUTBOX_STORE, EVENT_PUBLISHER, WAGERING_METRICS], // ATUALIZADO
+      inject: [OUTBOX_STORE, EVENT_PUBLISHER, WAGERING_METRICS],
     },
     {
       provide: HandleWagerMessage,
@@ -152,24 +157,37 @@ const wagerConsumerLogger = new Logger('WagerConsumer');
         new WagerMessageConsumer(queue, handler, {
           onSettled: (message, disposition) => {
             if (disposition.action === 'DEAD_LETTER') {
-              metrics.deadLettered(disposition.reason); // NOVO
-              wagerConsumerLogger.warn(
-                `message ${message.messageId} sent to DLQ: ${disposition.reason} (${disposition.detail})`,
-              );
+              metrics.deadLettered(disposition.reason);
+              wagerConsumerLogger.warn({
+                event: 'message_dead_lettered',
+                sqsMessageId: message.messageId,
+                walletId: message.groupId,
+                correlationId: message.correlationId,
+                reason: disposition.reason,
+                detail: disposition.detail,
+              });
             } else if (disposition.action === 'RETRY') {
-              metrics.retried('consumer'); // NOVO
-              wagerConsumerLogger.warn(
-                `message ${message.messageId} will retry in ${disposition.visibilityTimeoutSeconds}s ` +
-                  `(${disposition.reason}, delivery ${message.receiveCount})`,
-              );
+              metrics.retried('consumer');
+              wagerConsumerLogger.warn({
+                event: 'message_retry_scheduled',
+                sqsMessageId: message.messageId,
+                walletId: message.groupId,
+                correlationId: message.correlationId,
+                reason: disposition.reason,
+                delaySeconds: disposition.visibilityTimeoutSeconds,
+                delivery: message.receiveCount,
+              });
             }
           },
           onError: (error, message) =>
-            wagerConsumerLogger.error(
-              `failed to settle message ${message.messageId}: ${String(error)}`,
-            ),
+            wagerConsumerLogger.error({
+              event: 'message_settle_failed',
+              sqsMessageId: message.messageId,
+              walletId: message.groupId,
+              error: String(error),
+            }),
         }),
-      inject: [WAGER_QUEUE, HandleWagerMessage, WAGERING_METRICS], // ATUALIZADO
+      inject: [WAGER_QUEUE, HandleWagerMessage, WAGERING_METRICS],
     },
 
     // workers em segundo plano (ligam no bootstrap, desligam no shutdown)

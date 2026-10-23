@@ -19,6 +19,19 @@ import { WagerTransactionProcessor } from './wager-transaction-processor';
 import { NOOP_WAGERING_METRICS, type WageringMetrics } from './ports/wagering-metrics.port';
 import { databaseLockConflictType } from './transient-error';
 
+export interface TransactionDecision {
+  transactionId: string;
+  status: string;
+  failureCode: string | undefined;
+  replay: boolean;
+  kind: string;
+  walletId: string;
+  providerId: string;
+  correlationId: string | undefined;
+  /** messageId da fila, quando a entrada foi SQS. */
+  messageId: string | undefined;
+}
+
 export interface SubmitWagerTransactionCommand {
   idempotencyKey: string;
   providerId: string;
@@ -51,6 +64,7 @@ export interface SubmitWagerTransactionOptions {
   /** Atraso até a primeira reavaliação de uma transação PENDING_REFERENCE. */
   pendingReferenceBackoffMs?: number;
   metrics?: WageringMetrics;
+  onDecision?: (decision: TransactionDecision) => void;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,6 +82,7 @@ export class SubmitWagerTransaction {
   private readonly pendingReferenceBackoffMs: number;
   private readonly processor: WagerTransactionProcessor;
   private readonly metrics: WageringMetrics;
+  private readonly onDecision: ((decision: TransactionDecision) => void) | undefined;
 
   constructor(
     private readonly uow: WageringUnitOfWork,
@@ -78,6 +93,7 @@ export class SubmitWagerTransaction {
     this.pendingReferenceBackoffMs = options.pendingReferenceBackoffMs ?? 1_000;
     this.processor = new WagerTransactionProcessor(this.newId);
     this.metrics = options.metrics ?? NOOP_WAGERING_METRICS;
+    this.onDecision = options.onDecision;
   }
 
   async execute(command: SubmitWagerTransactionCommand): Promise<SubmitWagerTransactionResult> {
@@ -92,6 +108,7 @@ export class SubmitWagerTransaction {
           const result = await this.uow.run((scope) => this.executeInScope(scope, prepared));
           // Fora do uow.run: só conta depois do commit e uma única vez, mesmo com retry.
           this.recordResult(command, result);
+          this.notifyDecision(command, result);
           outcome = result.status.toLowerCase();
           return result;
         } catch (error) {
@@ -273,6 +290,24 @@ export class SubmitWagerTransaction {
   private recordResult(command: SubmitWagerTransactionCommand, result: SubmitWagerTransactionResult): void {
     if (result.idempotentReplay) this.metrics.duplicateDetected('replay');
     else this.metrics.transactionDecided(result.status, command.kind);
+  }
+
+  private notifyDecision(command: SubmitWagerTransactionCommand, result: SubmitWagerTransactionResult): void {
+    try {
+      this.onDecision?.({
+        transactionId: result.transactionId,
+        status: result.status,
+        failureCode: result.failureCode,
+        replay: result.idempotentReplay,
+        kind: command.kind,
+        walletId: command.walletId,
+        providerId: command.providerId,
+        correlationId: command.correlationId,
+        messageId: command.inbox?.messageId,
+      });
+    } catch {
+      // um listener com defeito não pode afetar o resultado financeiro
+    }
   }
 
   private recordFailure(error: unknown): void {

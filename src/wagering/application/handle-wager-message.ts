@@ -40,7 +40,11 @@ export class HandleWagerMessage {
         consumerName: this.consumerName,
         correlationId: context.correlationId,
       });
-      const result = await this.submitter.execute(parsed.command);
+        const result = await this.submitter.execute({
+        ...parsed.command,
+        // sem correlationId na mensagem, o messageId serve de rastro de ponta a ponta
+        correlationId: parsed.command.correlationId ?? parsed.messageId,
+      });
       return {
         action: 'ACK',
         transactionId: result.transactionId,
