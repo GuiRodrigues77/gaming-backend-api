@@ -110,7 +110,7 @@ Por que pessimista e não otimista:
 `OPENING` é interno: a API e a fila o recusam com `400`.
 
 **Interpretações adotadas** (o enunciado deixa margem):
-1. **Uma única reversão processada por transação referenciada, de qualquer tipo.** O enunciado diz "pelo mesmo tipo de operação"; adotamos a leitura mais conservadora: se uma `BET` já foi revertida por `REFUND`, um `ROLLBACK` da mesma `BET` também é recusado (`ALREADY_REVERSED`). Evita reverter duas vezes o mesmo valor por caminhos diferentes. É garantido pelo índice único parcial.
+1. **Uma única reversão processada por transação referenciada, de qualquer tipo.** O enunciado diz "pelo mesmo tipo de operação"; adotei a leitura mais conservadora: se uma `BET` já foi revertida por `REFUND`, um `ROLLBACK` da mesma `BET` também é recusado (`ALREADY_REVERSED`). Evita reverter duas vezes o mesmo valor por caminhos diferentes. É garantido pelo índice único parcial.
 2. **`ROLLBACK` que deixaria o saldo negativo** é `REVERSAL_WOULD_OVERDRAW`, código distinto de `INSUFFICIENT_FUNDS`, porque a causa operacional é outra.
 3. **Referência de outro jogador, wallet, moeda, rodada ou provedor** é `REFERENCE_MISMATCH`.
 
