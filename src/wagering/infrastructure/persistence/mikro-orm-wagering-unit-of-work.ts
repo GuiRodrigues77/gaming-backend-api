@@ -21,7 +21,10 @@ import { WalletMapper } from './mappers/wallet.mapper';
 import { WagerTransactionRecord } from './wager-transaction.record';
 import { WalletRecord } from './wallet.record';
 import type { OutboxMessage } from '../../domain/outbox/outbox-message';
-import { OutboxMessageMapper } from './mappers/outbox-message.mapper.js';
+import { OutboxMessageMapper } from './mappers/outbox-message.mapper';
+import type { InboxMessage } from '../../domain/inbox/inbox-message';
+import { InboxMessageRecord } from './inbox-message.record';
+import { InboxMessageMapper } from './mappers/inbox-message.mapper';
 
 function isUniqueViolation(error: unknown): boolean {
   if (error instanceof UniqueConstraintViolationException) return true;
@@ -97,10 +100,19 @@ class MikroOrmWageringScope implements WageringTransactionScope {
           : Money.from({ amount: record.observedBalance, currency: record.currency }),
     };
   }
-    enqueueOutbox(message: OutboxMessage): void {
+  
+  enqueueOutbox(message: OutboxMessage): void {
     this.em.persist(OutboxMessageMapper.toRecord(message)); // flush junto com o commit
   }
 
+  async findInboxMessage(consumerName: string, messageId: string): Promise<InboxMessage | undefined> {
+    const record = await this.em.findOne(InboxMessageRecord, { consumerName, messageId });
+    return record === null ? undefined : InboxMessageMapper.toDomain(record);
+  }
+
+  saveInboxMessage(message: InboxMessage): void {
+    this.em.persist(InboxMessageMapper.toRecord(message)); // flush junto com o commit
+  }
 }
 
 @Injectable()

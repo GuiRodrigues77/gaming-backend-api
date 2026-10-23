@@ -8,6 +8,7 @@ import request from 'supertest';
 import config from '../../../../mikro-orm.config';
 import { WAGERING_SCHEMAS } from '../../infrastructure/persistence/wagering-schemas';
 import { WageringModule } from '../../wagering.module';
+import { SqsReadinessCheck } from './health/sqs-readiness.check';
 
 const RUN = process.env.DATABASE_INTEGRATION?.trim() === '1';
 
@@ -22,10 +23,13 @@ describe.skipIf(!RUN)('API HTTP (PostgreSQL real)', () => {
         MikroOrmModule.forRoot({ ...config, entities: WAGERING_SCHEMAS, entitiesTs: WAGERING_SCHEMAS }),
         WageringModule,
       ],
-    }).compile();
+    })
+      .overrideProvider(SqsReadinessCheck) // MOCK APLICADO AQUI
+      .useValue({ name: 'sqs', check: async () => undefined })
+      .compile();
     app = moduleRef.createNestApplication();
     await app.init();
-    await app.listen(0); // escutando de verdade: requisições paralelas usam o mesmo servidor
+    await app.listen(0);
     em = app.get(EntityManager);
   });
 
@@ -311,6 +315,8 @@ describe.skipIf(!RUN)('API HTTP (PostgreSQL real)', () => {
     expect((await request(server()).get('/health/live')).body).toEqual({ status: 'ok' });
     const ready = await request(server()).get('/health/ready');
     expect(ready.status).toBe(200);
-    expect(ready.body).toEqual({ status: 'ok', checks: { postgres: 'up' } });
+    
+    // ATUALIZAÇÃO NO ASSERT FINAL PARA INCLUIR O SQS UP NO RETORNO ESPERADO
+    expect(ready.body).toEqual({ status: 'ok', checks: { postgres: 'up', sqs: 'up' } });
   });
 });

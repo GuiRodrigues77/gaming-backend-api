@@ -46,3 +46,22 @@ export class InvalidQueryError extends Error {
     this.name = 'InvalidQueryError';
   }
 }
+
+/** Mesmo messageId chegando com payload diferente: conflito, não redelivery. */
+export class InboxPayloadMismatchError extends Error {
+  constructor(
+    public readonly consumerName: string,
+    public readonly messageId: string,
+  ) {
+    super(`Inbox message ${messageId} (${consumerName}) was already received with a different payload`);
+    this.name = 'InboxPayloadMismatchError';
+  }
+}
+
+/** Mensagem da fila malformada ou de tipo desconhecido: erro permanente, vai direto para a DLQ. */
+export class InvalidWagerMessageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidWagerMessageError';
+  }
+}

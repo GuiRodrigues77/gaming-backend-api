@@ -1,9 +1,11 @@
 import type { EventPublisher } from './ports/event-publisher.port';
 import type { OutboxStore } from './ports/outbox-store.port';
+import { NOOP_WAGERING_METRICS, type WageringMetrics } from './ports/wagering-metrics.port';
 
 export interface OutboxPublisherOptions {
   batchSize?: number;
   now?: () => Date;
+  metrics?: WageringMetrics;
 }
 
 export interface OutboxPublishResult {
@@ -17,6 +19,7 @@ export interface OutboxPublishResult {
 export class OutboxPublisher {
   private readonly batchSize: number;
   private readonly now: () => Date;
+  private readonly metrics: WageringMetrics;
 
   constructor(
     private readonly store: OutboxStore,
@@ -25,6 +28,7 @@ export class OutboxPublisher {
   ) {
     this.batchSize = options.batchSize ?? 20;
     this.now = options.now ?? (() => new Date());
+    this.metrics = options.metrics ?? NOOP_WAGERING_METRICS;
   }
 
   /**
@@ -44,6 +48,7 @@ export class OutboxPublisher {
         } catch {
           message.scheduleRetry(this.now());
           failed += 1;
+          this.metrics.retried('outbox');
         }
         batch.save(message);
       }

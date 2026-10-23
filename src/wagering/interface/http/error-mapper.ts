@@ -6,10 +6,13 @@ import {
   UniqueViolationError,
   WalletAlreadyExistsError,
 } from '../../application/errors';
+import { isTransientDatabaseError } from '../../application/transient-error';
 import { InvalidLedgerEntryError } from '../../domain/ledger/ledger.errors';
 import { InvalidMoneyError } from '../../domain/money/money.errors';
 import { InvalidWagerTransactionError } from '../../domain/transaction/wager-transaction.errors';
 import { InvalidWalletOperationError } from '../../domain/wallet/wallet.errors';
+
+export { isTransientDatabaseError };
 
 export interface ErrorBody {
   statusCode: number;
@@ -22,27 +25,6 @@ export interface MappedError {
   statusCode: number;
   body: ErrorBody;
   retryAfterSeconds?: number;
-}
-
-const TRANSIENT_CODES = new Set([
-  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE',
-  '57P01', '57P02', '57P03', // banco desligando/reiniciando
-  '53300', // too many connections
-  '08000', '08001', '08003', '08004', '08006', // problemas de conexão
-  '40001', '40P01', // serialização e deadlock
-]);
-const TRANSIENT_MESSAGE = /connection (terminated|refused|reset)|timeout|too many clients/i;
-
-/** Falha de infraestrutura que deve ser retentada pelo cliente. */
-export function isTransientDatabaseError(error: unknown): boolean {
-  let current: unknown = error;
-  for (let depth = 0; depth < 4 && typeof current === 'object' && current !== null; depth += 1) {
-    const { code, message, cause } = current as { code?: unknown; message?: unknown; cause?: unknown };
-    if (typeof code === 'string' && TRANSIENT_CODES.has(code)) return true;
-    if (typeof message === 'string' && TRANSIENT_MESSAGE.test(message)) return true;
-    current = cause;
-  }
-  return false;
 }
 
 function fail(statusCode: number, error: string, message: string, details?: unknown): MappedError {

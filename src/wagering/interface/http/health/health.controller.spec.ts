@@ -14,13 +14,13 @@ const down = (name: string): ReadinessCheck => ({
 
 describe('HealthController', () => {
   test('live não depende de nada', () => {
-    expect(new HealthController([down('postgres')]).live()).toEqual({ status: 'ok' });
+    expect(new HealthController([down('postgres'), down('sqs')]).live()).toEqual({ status: 'ok' });
   });
 
   test('ready: tudo alcançável', async () => {
-    expect(await new HealthController([up('postgres')]).ready()).toEqual({
+    expect(await new HealthController([up('postgres'), up('sqs')]).ready()).toEqual({
       status: 'ok',
-      checks: { postgres: 'up' },
+      checks: { postgres: 'up', sqs: 'up' },
     });
   });
 

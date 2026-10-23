@@ -1,5 +1,9 @@
+import type { SQSClient } from '@aws-sdk/client-sqs';
 import { Logger, Module } from '@nestjs/common';
 import { CreateWallet } from './application/create-wallet';
+import { OutboxPublisher } from './application/outbox-publisher';
+import { EVENT_PUBLISHER, type EventPublisher } from './application/ports/event-publisher.port';
+import { OUTBOX_STORE, type OutboxStore } from './application/ports/outbox-store.port';
 import {
   PENDING_REFERENCE_UNIT_OF_WORK,
   type PendingReferenceUnitOfWork,
@@ -16,33 +20,98 @@ import { WALLET_CREATOR, type WalletCreator } from './application/ports/wallet-c
 import { ResolvePendingReferences } from './application/resolve-pending-references';
 import { SubmitWagerTransaction } from './application/submit-wager-transaction';
 import { WageringQueries } from './application/wagering-queries';
+import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher';
+import {
+  SQS_CLIENT,
+  SQS_CONFIG,
+  createSqsClient,
+  loadSqsConfig,
+  type SqsConfig,
+} from './infrastructure/messaging/sqs.config';
+import { MikroOrmOutboxStore } from './infrastructure/persistence/mikro-orm-outbox-store';
 import { MikroOrmPendingReferenceUnitOfWork } from './infrastructure/persistence/mikro-orm-pending-reference-unit-of-work';
 import { MikroOrmWageringReadModel } from './infrastructure/persistence/mikro-orm-wagering-read-model';
 import { MikroOrmWageringUnitOfWork } from './infrastructure/persistence/mikro-orm-wagering-unit-of-work';
 import { MikroOrmWalletCreator } from './infrastructure/persistence/mikro-orm-wallet-creator';
+import { OutboxWorkerService } from './infrastructure/workers/outbox-worker.service';
 import { PendingReferenceWorkerService } from './infrastructure/workers/pending-reference-worker.service';
 import { HealthController } from './interface/http/health/health.controller';
 import { PostgresReadinessCheck } from './interface/http/health/postgres-readiness.check';
 import { READINESS_CHECKS } from './interface/http/health/readiness-check';
+import { SqsReadinessCheck } from './interface/http/health/sqs-readiness.check';
 import { WageringController } from './interface/http/wagering.controller';
 import { WalletsController } from './interface/http/wallets.controller';
+import { HandleWagerMessage } from './application/handle-wager-message';
+import { WAGER_QUEUE, type WagerQueue } from './application/ports/wager-queue.port';
+import {
+  WagerMessageConsumer,
+  type WagerMessageProcessor,
+} from './application/wager-message-consumer';
+import { SqsWagerQueue } from './infrastructure/messaging/sqs-wager-queue';
+import { WagerConsumerWorkerService } from './infrastructure/workers/wager-consumer-worker.service';
+
+// Importações de Métricas (NOVO)
+import {
+  METRICS_RENDERER,
+  WAGERING_METRICS,
+  type WageringMetrics,
+} from './application/ports/wagering-metrics.port';
+import { PrometheusWageringMetrics } from './infrastructure/observability/prometheus-wagering-metrics';
+import { MetricsController } from './interface/http/metrics.controller';
 
 const pendingReferencesLogger = new Logger('PendingReferences');
+const WAGER_CONSUMER_NAME = 'wager-consumer';
+const wagerConsumerLogger = new Logger('WagerConsumer');
 
 @Module({
-  controllers: [WalletsController, WageringController, HealthController],
+  controllers: [
+    WalletsController,
+    WageringController,
+    HealthController,
+    MetricsController, // NOVO
+  ],
   providers: [
     // portas -> adaptadores MikroORM
     { provide: WAGERING_UNIT_OF_WORK, useClass: MikroOrmWageringUnitOfWork },
     { provide: WALLET_CREATOR, useClass: MikroOrmWalletCreator },
     { provide: WAGERING_READ_MODEL, useClass: MikroOrmWageringReadModel },
     { provide: PENDING_REFERENCE_UNIT_OF_WORK, useClass: MikroOrmPendingReferenceUnitOfWork },
+    { provide: OUTBOX_STORE, useClass: MikroOrmOutboxStore },
+
+    // SQS
+    { provide: SQS_CONFIG, useFactory: () => loadSqsConfig() },
+    {
+      provide: SQS_CLIENT,
+      useFactory: (config: SqsConfig) => createSqsClient(config),
+      inject: [SQS_CONFIG],
+    },
+    {
+      provide: EVENT_PUBLISHER,
+      useFactory: (client: SQSClient, config: SqsConfig) =>
+        new SqsEventPublisher(client, config.eventsQueueName),
+      inject: [SQS_CLIENT, SQS_CONFIG],
+    },
+    {
+      provide: WAGER_QUEUE,
+      useFactory: (client: SQSClient, config: SqsConfig) =>
+        new SqsWagerQueue(client, {
+          queueName: config.wagerQueueName,
+          deadLetterQueueName: config.wagerDeadLetterQueueName,
+        }),
+      inject: [SQS_CLIENT, SQS_CONFIG],
+    },
+
+    // métricas (Prometheus) (NOVO)
+    PrometheusWageringMetrics,
+    { provide: WAGERING_METRICS, useExisting: PrometheusWageringMetrics },
+    { provide: METRICS_RENDERER, useExisting: PrometheusWageringMetrics },
 
     // casos de uso (classes puras, sem decorators do Nest)
     {
       provide: SubmitWagerTransaction,
-      useFactory: (uow: WageringUnitOfWork) => new SubmitWagerTransaction(uow),
-      inject: [WAGERING_UNIT_OF_WORK],
+      useFactory: (uow: WageringUnitOfWork, metrics: WageringMetrics) =>
+        new SubmitWagerTransaction(uow, { metrics }),
+      inject: [WAGERING_UNIT_OF_WORK, WAGERING_METRICS], // ATUALIZADO
     },
     {
       provide: CreateWallet,
@@ -65,16 +134,56 @@ const pendingReferencesLogger = new Logger('PendingReferences');
         }),
       inject: [PENDING_REFERENCE_UNIT_OF_WORK],
     },
+    {
+      provide: OutboxPublisher,
+      useFactory: (store: OutboxStore, publisher: EventPublisher, metrics: WageringMetrics) =>
+        new OutboxPublisher(store, publisher, { metrics }),
+      inject: [OUTBOX_STORE, EVENT_PUBLISHER, WAGERING_METRICS], // ATUALIZADO
+    },
+    {
+      provide: HandleWagerMessage,
+      useFactory: (submit: SubmitWagerTransaction) =>
+        new HandleWagerMessage(submit, { consumerName: WAGER_CONSUMER_NAME }),
+      inject: [SubmitWagerTransaction],
+    },
+    {
+      provide: WagerMessageConsumer,
+      useFactory: (queue: WagerQueue, handler: WagerMessageProcessor, metrics: WageringMetrics) =>
+        new WagerMessageConsumer(queue, handler, {
+          onSettled: (message, disposition) => {
+            if (disposition.action === 'DEAD_LETTER') {
+              metrics.deadLettered(disposition.reason); // NOVO
+              wagerConsumerLogger.warn(
+                `message ${message.messageId} sent to DLQ: ${disposition.reason} (${disposition.detail})`,
+              );
+            } else if (disposition.action === 'RETRY') {
+              metrics.retried('consumer'); // NOVO
+              wagerConsumerLogger.warn(
+                `message ${message.messageId} will retry in ${disposition.visibilityTimeoutSeconds}s ` +
+                  `(${disposition.reason}, delivery ${message.receiveCount})`,
+              );
+            }
+          },
+          onError: (error, message) =>
+            wagerConsumerLogger.error(
+              `failed to settle message ${message.messageId}: ${String(error)}`,
+            ),
+        }),
+      inject: [WAGER_QUEUE, HandleWagerMessage, WAGERING_METRICS], // ATUALIZADO
+    },
 
-    // worker em segundo plano (liga no bootstrap, desliga no shutdown)
+    // workers em segundo plano (ligam no bootstrap, desligam no shutdown)
     PendingReferenceWorkerService,
+    OutboxWorkerService,
+    WagerConsumerWorkerService,
 
-    // readiness: quando entrar o SQS, é só incluir o check novo nesta lista
+    // readiness: PostgreSQL e SQS
     PostgresReadinessCheck,
+    SqsReadinessCheck,
     {
       provide: READINESS_CHECKS,
-      useFactory: (postgres: PostgresReadinessCheck) => [postgres],
-      inject: [PostgresReadinessCheck],
+      useFactory: (postgres: PostgresReadinessCheck, sqs: SqsReadinessCheck) => [postgres, sqs],
+      inject: [PostgresReadinessCheck, SqsReadinessCheck],
     },
   ],
 })

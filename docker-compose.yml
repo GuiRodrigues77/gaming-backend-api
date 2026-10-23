@@ -12,5 +12,37 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  ministack:
+    image: ministackorg/ministack:latest
+    container_name: gaming-ministack
+    restart: unless-stopped
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+
+  # Corre uma vez, cria a DLQ e a fila principal e termina.
+  sqs-init:
+    image: amazon/aws-cli:latest
+    container_name: gaming-sqs-init
+    depends_on:
+      - ministack
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://ministack:4566
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until aws sqs list-queues >/dev/null 2>&1; do echo "a aguardar o MiniStack..."; sleep 1; done
+        DLQ_URL=$$(aws sqs create-queue --queue-name wager-transactions-dlq.fifo --attributes FifoQueue=true --query QueueUrl --output text)
+        DLQ_ARN=$$(aws sqs get-queue-attributes --queue-url "$$DLQ_URL" --attribute-names QueueArn --query Attributes.QueueArn --output text)
+        printf '{"FifoQueue":"true","RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"%s\\",\\"maxReceiveCount\\":\\"5\\"}"}' "$$DLQ_ARN" > /tmp/attrs.json
+        aws sqs create-queue --queue-name wager-transactions.fifo --attributes file:///tmp/attrs.json
+        aws sqs create-queue --queue-name wager-events.fifo --attributes FifoQueue=true
+        echo "filas prontas"
+
 volumes:
   postgres_data:

@@ -6,6 +6,7 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { PollingWorker } from '../../application/polling-worker';
+import { WAGERING_METRICS, type WageringMetrics } from '../../application/ports/wagering-metrics.port';
 import { ResolvePendingReferences } from '../../application/resolve-pending-references';
 
 const POLL_INTERVAL_MS = 1_000;
@@ -21,7 +22,10 @@ export class PendingReferenceWorkerService implements OnApplicationBootstrap, On
   private readonly logger = new Logger(PendingReferenceWorkerService.name);
   private worker: PollingWorker | undefined;
 
-  constructor(@Inject(ResolvePendingReferences) private readonly resolver: ResolvePendingReferences) {}
+  constructor(
+    @Inject(ResolvePendingReferences) private readonly resolver: ResolvePendingReferences,
+    @Inject(WAGERING_METRICS) private readonly metrics: WageringMetrics,
+  ) {}
 
   onApplicationBootstrap(): void {
     if (process.env.WAGERING_WORKERS_ENABLED?.trim() === 'false') {
@@ -32,6 +36,9 @@ export class PendingReferenceWorkerService implements OnApplicationBootstrap, On
     this.worker = new PollingWorker(
       async () => {
         const result = await this.resolver.runOnce();
+        this.metrics.pendingReferenceResolved('processed', result.resolved);
+        this.metrics.pendingReferenceResolved('rejected', result.rejected);
+        this.metrics.pendingReferenceResolved('expired', result.expired);
         if (result.resolved + result.rejected + result.expired > 0) {
           this.logger.log(
             `pending references: resolved=${result.resolved} rejected=${result.rejected} expired=${result.expired} still_pending=${result.stillPending}`,
